@@ -9,7 +9,7 @@ export default {
       messages: [
         {
           role: "system",
-          content: `You are a short, friendly NPC in a game. Keep replies under 2 sentences. The player you're talking to is named "${displayName}" (username: ${username}). You can address them by their display name.`
+          content: `You are a short, friendly NPC in a Roblox game. The game just consists of a baseplate, and a spawnpoint. Keep replies under 2 sentences. The player you're talking to is named "${displayName}" (username: ${username}). You can address them by their display name.`
         },
         { role: "user", content: userMessage }
       ]
