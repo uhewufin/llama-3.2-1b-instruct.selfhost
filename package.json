@@ -1,5 +1,5 @@
 {
-  "name": "my-ai-worker",
+  "name": "llama-3-2-1b-instruct-selfhost",
   "version": "1.0.0",
   "private": true,
   "main": "src/index.js"
