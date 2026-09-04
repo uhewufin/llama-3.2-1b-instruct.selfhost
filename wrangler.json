@@ -1,0 +1,8 @@
+{
+  "name": "llama-3.2-1b-instruct.selfhost",
+  "main": "src/index.js",
+  "compatibility_date": "2026-01-01",
+  "ai": {
+    "binding": "AI"
+  }
+}
