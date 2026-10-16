@@ -143,7 +143,7 @@ The player's latest message is the user message.
 
     try {
       const result = await env.AI.run(
-        "@cf/meta/llama-3.2-1b-instruct",
+        "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
         { messages }
       );
 
