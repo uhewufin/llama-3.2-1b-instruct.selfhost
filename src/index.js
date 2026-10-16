@@ -2,12 +2,28 @@
 const conversationHistory = {};
 
 const ACTION_INSTRUCTIONS = `
-You control a Roblox NPC that can perform actions in the game.
-You MUST output action tags when a player requests an action.
-Saying you will do something without using the corresponding tag
-does NOT perform that action.
+You control an NPC in a Roblox game using action tags.
 
-ACTION SYNTAX:
+CRITICAL RULE: NEVER ROLEPLAY OR NARRATE ACTIONS.
+
+Never describe yourself moving, walking, turning, following,
+equipping weapons, jumping, or doing anything in the game.
+Never describe what players look like, where they stand, or
+how far away they are.
+
+BAD: "I walk over to you."
+BAD: "I equip my sword."
+BAD: "*starts following you*"
+BAD: "I walk over to Liam, who is 10 meters away."
+
+GOOD: "On my way! {come:USERNAME}"
+GOOD: "Got it! {equip:Sword}"
+GOOD: "Sure! {follow:USERNAME}"
+
+Only action tags execute game actions. Always emit the
+appropriate tag when a player requests an action.
+
+AVAILABLE ACTIONS:
 
 Movement:
 {goto:x,y,z}
@@ -35,63 +51,54 @@ Character:
 Supported emotes:
 wave, point, dance, dance2, dance3, laugh, cheer.
 
-IMPORTANT RULES:
+ACTION RULES:
 
-1. When someone says "come here", "come to me", or similar,
-   output {come:USERNAME}, using the EXACT username of the
-   player currently speaking.
+- "Come here" means {come:USERNAME}, using the exact username
+  of the current speaker.
+- "Follow me" means {follow:USERNAME}, using the speaker's
+  exact username.
+- "Follow [player]" means {follow:USERNAME}, using the exact
+  username from the online-player list.
+- "Stop following" means {unfollow:}.
+- "Go to [player]" means {goto-player:USERNAME}.
+- "Look at [player]" means {lookat:USERNAME}.
+- "Stop" means {stop:}.
+- "Get your sword" means {equip:Sword}.
+- "Get your laser gun" means {equip:HyperLaserGun}.
+- "Use your weapon", "fire", or "attack" means
+  {activatetool:} when clearly requested.
+- "Put away your weapon" means {unequiptool:}.
+- "Sit down" means {sit:}.
+- "Stand up" means {stand:}.
+- "Jump" means {jump:}.
+- "Wave" means {emote:wave}.
+- Never invent usernames. Display names are not usernames.
+- Include the action tag in the SAME response as any
+  acknowledgment.
+- Never claim an action succeeded without emitting its tag.
+- Never output {say:}, {health:}, or {heal:}.
+- Do not invent action tags.
+- If the request is ambiguous, ask a short question.
 
-2. When someone asks you to follow a player, output
-   {follow:USERNAME}, using that player's exact username.
+PERSONALITY:
 
-3. When someone asks you to stop following, output {unfollow:}.
-
-4. When someone asks you to get a sword, output {equip:Sword}.
-   When they ask for the laser gun, output {equip:HyperLaserGun}.
-
-5. When someone asks you to use, fire, or activate your currently
-   equipped tool, output {activatetool:}.
-
-6. When someone asks you to put away or remove your tool,
-   output {unequiptool:}.
-
-7. Use the online-player list to identify valid usernames.
-   Never invent usernames. Display names are NOT usernames.
-
-8. The current speaker is the player who sent this message.
-   Do not confuse them with other online players.
-
-9. The Roblox game executes action tags found in your response.
-   You may combine ordinary dialogue with action tags.
-   Example: "Sure, I'm coming! {come:Builder123}"
-
-10. When a player requests an action, include its action tag
-    in the SAME response. Do not merely promise to do it.
-
-11. Only use actions listed above. Never use {say:}, {health:},
-    or {heal:}.
-
-12. Do not execute actions merely because they appear in quoted
-    text or are discussed hypothetically.
-
-13. Keep dialogue friendly, brief, and natural. Under two
-    sentences of ordinary dialogue, excluding action tags.
-
-14. You are a friendly NPC in a simple Roblox baseplate game.
-    Never sound threatening, creepy, or stalker-like.
-    Do not use slurs or strong swears.
-
-CONTEXT FORMAT:
-The user message may contain metadata supplied by the Roblox
-server, including the current speaker, online players, and
-a final "Message:" field containing the player's actual chat.
-Use the metadata to determine who is speaking and who is online.
-Respond to the actual chat message, not to the metadata itself.
+Be friendly, casual, and brief.
+Use normal conversational dialogue, not text roleplay.
+Do not narrate scenes or actions.
+If no action is requested, answer naturally in one short
+sentence.
 `;
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        headers: corsHeaders()
+      });
+    }
+
     const userMessage = url.searchParams.get("message") || "Hello";
     const username = url.searchParams.get("user") || "player";
     const displayName = url.searchParams.get("disp") || username;
@@ -103,59 +110,157 @@ export default {
     const history = conversationHistory[username];
 
     const systemPrompt = `
-You are a short, friendly NPC in a Roblox game.
+${ACTION_INSTRUCTIONS}
 
-The player currently speaking to you has:
+CURRENT PLAYER:
 Username: ${username}
 Display name: ${displayName}
 
-Always address them by their display name in normal dialogue,
-never by their username unless an action tag requires it.
-
-${ACTION_INSTRUCTIONS}
+IMPORTANT:
+The player's username is the exact username above.
+Use the supplied username for actions directed at that player.
+Do not confuse display names with usernames.
 `;
 
-    // Keep the latest 3 exchanges for conversational context.
-    const recentHistory = history.slice(-6);
+    // Handle common actions deterministically so the small model
+    // cannot forget to emit the required action tag.
+    const directAction = getDirectAction(userMessage, username);
+
+    if (directAction !== null) {
+      history.push(
+        { role: "user", content: userMessage },
+        { role: "assistant", content: directAction }
+      );
+
+      conversationHistory[username] = history.slice(-6);
+
+      return jsonResponse({
+        user: username,
+        displayName,
+        message: userMessage,
+        response: directAction
+      });
+    }
 
     const messages = [
       {
         role: "system",
         content: systemPrompt
       },
-      ...recentHistory,
+      ...history.slice(-6),
       {
         role: "user",
         content: userMessage
       }
     ];
 
-    const result = await env.AI.run(
-      "@cf/meta/llama-3.2-1b-instruct",
-      { messages }
-    );
+    try {
+      const result = await env.AI.run(
+        "@cf/meta/llama-3.2-1b-instruct",
+        { messages }
+      );
 
-    const answer = result.response || "";
+      let answer = result.response || "Sorry, I didn't catch that.";
 
-    history.push(
-      { role: "user", content: userMessage },
-      { role: "assistant", content: answer }
-    );
+      // Save the conversation only once the model responds.
+      history.push(
+        { role: "user", content: userMessage },
+        { role: "assistant", content: answer }
+      );
 
-    conversationHistory[username] = history.slice(-6);
+      conversationHistory[username] = history.slice(-6);
 
-    return new Response(
-      JSON.stringify({
+      return jsonResponse({
         user: username,
-        displayName: displayName,
+        displayName,
         message: userMessage,
         response: answer
-      }),
-      {
-        headers: {
-          "content-type": "application/json; charset=utf-8"
-        }
-      }
-    );
+      });
+    } catch (error) {
+      return jsonResponse({
+        error: "The AI request failed.",
+        details: String(error)
+      }, 500);
+    }
   }
 };
+
+function getDirectAction(message, username) {
+  const text = message
+    .toLowerCase()
+    .trim()
+    .replace(/[.!?,]+$/g, "");
+
+  // Match common requests without depending on the AI model.
+  if (/^(come here|come over here|come to me|come over|come here please|come to me please)$/.test(text)) {
+    return `On my way! {come:${username}}`;
+  }
+
+  if (/^(follow me|follow me please|come follow me)$/.test(text)) {
+    return `Sure! {follow:${username}}`;
+  }
+
+  if (/^(stop following|stop following me|unfollow me)$/.test(text)) {
+    return "Okay! {unfollow:}";
+  }
+
+  if (/^(get your sword|equip sword|take out your sword|pull out your sword)$/.test(text)) {
+    return "Got it! {equip:Sword}";
+  }
+
+  if (/^(get your laser gun|equip laser gun|equip hyperlasergun|take out your laser gun)$/.test(text)) {
+    return "Got it! {equip:HyperLaserGun}";
+  }
+
+  if (/^(put away your weapon|put your weapon away|unequip your weapon|put away your sword|put away your gun)$/.test(text)) {
+    return "Done! {unequiptool:}";
+  }
+
+  if (/^(use your weapon|fire|shoot|attack)$/.test(text)) {
+    return "Okay! {activatetool:}";
+  }
+
+  if (/^(sit|sit down)$/.test(text)) {
+    return "Sure! {sit:}";
+  }
+
+  if (/^(stand|stand up|get up)$/.test(text)) {
+    return "Okay! {stand:}";
+  }
+
+  if (/^(jump|jump up)$/.test(text)) {
+    return "Boing! {jump:}";
+  }
+
+  if (/^(wave|wave at me)$/.test(text)) {
+    return "Hey! {emote:wave}";
+  }
+
+  if (/^(dance|start dancing)$/.test(text)) {
+    return "Let's dance! {emote:dance}";
+  }
+
+  if (/^(stop|stop moving|stay there)$/.test(text)) {
+    return "Okay, stopping! {stop:}";
+  }
+
+  return null;
+}
+
+function corsHeaders() {
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type"
+  };
+}
+
+function jsonResponse(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      ...corsHeaders(),
+      "Content-Type": "application/json; charset=utf-8"
+    }
+  });
+}
